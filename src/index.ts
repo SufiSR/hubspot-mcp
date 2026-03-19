@@ -72,6 +72,157 @@ async function handleEndpoint(apiCall: () => Promise<any>) {
   }
 }
 
+function stripHtml(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function stripQuotedContent(text: string): string {
+  const patterns = [
+    /^On .+ wrote:\s*$/m,
+    /^-{2,}\s*Original Message\s*-{2,}/mi,
+    /^-{2,}\s*Forwarded message\s*-{2,}/mi,
+    /^From:\s.+\nSent:\s.+\nTo:\s/m,
+    /^Von:\s.+\nGesendet:\s.+\nAn:\s/m,
+    /^De\s?:\s.+\nEnvoy[eé]\s?:\s.+\n[AÀ]\s?:\s/m,
+    /^>{3,}/m,
+    /\n>(?:\s|$)/,
+  ]
+  for (const pattern of patterns) {
+    const match = text.search(pattern)
+    if (match > 0) return text.substring(0, match).trim()
+  }
+  return text
+}
+
+function normalizeEmailSubject(subject: string): string {
+  return subject
+    .replace(/^(Re|Fwd|Fw|AW|WG|Antwort|SV|VS)\s*:\s*/gi, '')
+    .trim()
+    .toLowerCase()
+}
+
+function extractEngagementSummary(raw: any, bodyMaxChars: number) {
+  const eng = raw.engagement || {}
+  const meta = raw.metadata || {}
+  const assoc = raw.associations || {}
+
+  let subject = ''
+  let bodyPreview = ''
+  let direction: string | undefined = undefined
+  let participants: string[] = []
+
+  switch (eng.type) {
+    case 'EMAIL':
+      subject = meta.subject || ''
+      bodyPreview = stripQuotedContent(stripHtml(meta.text || meta.html || ''))
+      if (meta.from?.email) {
+        direction = `from: ${meta.from.email}`
+        participants.push(meta.from.email)
+      }
+      if (Array.isArray(meta.to)) {
+        for (const r of meta.to) {
+          if (r?.email) participants.push(r.email)
+        }
+      }
+      break
+    case 'CALL':
+      subject = meta.title || ''
+      bodyPreview = stripHtml(meta.body || '')
+      direction = meta.callDirection || undefined
+      break
+    case 'MEETING':
+      subject = meta.title || ''
+      bodyPreview = stripHtml(meta.body || '')
+      break
+    case 'TASK':
+      subject = meta.subject || ''
+      bodyPreview = stripHtml(meta.body || '')
+      break
+    case 'NOTE':
+      subject = (stripHtml(meta.body || '')).split('\n')[0]?.substring(0, 80) || ''
+      bodyPreview = stripHtml(meta.body || '')
+      break
+  }
+
+  if (bodyPreview.length > bodyMaxChars) {
+    bodyPreview = bodyPreview.substring(0, bodyMaxChars) + '…'
+  }
+
+  return {
+    id: eng.id,
+    type: eng.type,
+    timestamp: eng.timestamp ? new Date(eng.timestamp).toISOString() : null,
+    ownerId: eng.ownerId,
+    subject,
+    bodyPreview,
+    direction,
+    participants: participants.length > 0 ? participants : undefined,
+    associationCounts: {
+      contacts: (assoc.contactIds || []).length,
+      companies: (assoc.companyIds || []).length,
+      deals: (assoc.dealIds || []).length,
+    }
+  }
+}
+
+function groupEmailThreads(summaries: any[]): any[] {
+  const emails = summaries.filter((s: any) => s.type === 'EMAIL')
+  const nonEmails = summaries.filter((s: any) => s.type !== 'EMAIL')
+
+  const threadMap = new Map<string, any[]>()
+  for (const email of emails) {
+    const key = normalizeEmailSubject(email.subject || '')
+    if (!threadMap.has(key)) threadMap.set(key, [])
+    threadMap.get(key)!.push(email)
+  }
+
+  const grouped: any[] = []
+  for (const [subject, thread] of threadMap) {
+    if (thread.length === 1) {
+      grouped.push(thread[0])
+      continue
+    }
+
+    thread.sort((a: any, b: any) =>
+      new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime()
+    )
+
+    const allParticipants = new Set<string>()
+    for (const t of thread) {
+      if (t.participants) {
+        for (const p of t.participants) allParticipants.add(p)
+      }
+    }
+
+    const latest = thread[thread.length - 1]
+    grouped.push({
+      type: 'EMAIL_THREAD',
+      subject: latest.subject || subject,
+      messageCount: thread.length,
+      firstMessage: thread[0].timestamp,
+      lastMessage: latest.timestamp,
+      participants: [...allParticipants],
+      latestBodyPreview: latest.bodyPreview,
+      engagementIds: thread.map((t: any) => t.id),
+    })
+  }
+
+  return [...nonEmails, ...grouped].sort((a: any, b: any) => {
+    const tA = a.timestamp || a.lastMessage || ''
+    const tB = b.timestamp || b.lastMessage || ''
+    return new Date(tA).getTime() - new Date(tB).getTime()
+  })
+}
+
 function getConfig(config: any) {
   return {
     hubspotAccessToken: config?.HUBSPOT_ACCESS_TOKEN || process.env.HUBSPOT_ACCESS_TOKEN,
@@ -1798,6 +1949,62 @@ function createServer({ config }: { config?: any } = {}) {
           limit: params.limit,
           offset: params.offset
         })
+      })
+    }
+  )
+
+  server.tool("engagement_summary_associated",
+    "Get a compact summary of all engagements associated with an object. " +
+    "Returns a digest with type, date, subject/title, body preview, owner, " +
+    "and association counts. Email threads are grouped and quoted reply content " +
+    "is stripped. Use this instead of engagement_details_get_associated when " +
+    "summarizing communication history to avoid context overflow.",
+    {
+      objectType: z.enum(['CONTACT', 'COMPANY', 'DEAL', 'TICKET']),
+      objectId: z.string(),
+      activityTypes: z.array(
+        z.enum(['EMAIL', 'CALL', 'MEETING', 'TASK', 'NOTE'])
+      ).optional(),
+      startTime: z.string().optional(),
+      endTime: z.string().optional(),
+      maxResults: z.number().min(1).max(500).optional(),
+      bodyMaxChars: z.number().min(0).max(1000).optional(),
+    },
+    async (params) => {
+      return handleEndpoint(async () => {
+        const maxResults = params.maxResults ?? 250
+        const bodyMaxChars = params.bodyMaxChars ?? 200
+        const summaries: any[] = []
+        let offset = 0
+        let hasMore = true
+
+        while (hasMore && summaries.length < maxResults) {
+          const pageLimit = Math.min(100, maxResults - summaries.length)
+          const endpoint = `/engagements/v1/engagements/associated/${params.objectType}/${params.objectId}/paged`
+          const data = await makeApiRequest(hubspotAccessToken, endpoint, {
+            limit: pageLimit,
+            offset,
+            ...(params.startTime && { startTime: params.startTime }),
+            ...(params.endTime && { endTime: params.endTime }),
+            ...(params.activityTypes && { activityTypes: params.activityTypes.join(',') }),
+          })
+
+          if (typeof data === 'string') return formatResponse(data)
+
+          for (const result of (data.results || [])) {
+            summaries.push(extractEngagementSummary(result, bodyMaxChars))
+          }
+
+          hasMore = data.hasMore === true
+          offset = data.offset ?? offset + pageLimit
+        }
+
+        const grouped = groupEmailThreads(summaries)
+
+        const header = `Found ${summaries.length} engagements for ${params.objectType} ${params.objectId}` +
+          ` (${grouped.length} entries after email thread grouping, body previews truncated to ${bodyMaxChars} chars)`
+
+        return formatResponse({ summary: header, engagements: grouped })
       })
     }
   )
