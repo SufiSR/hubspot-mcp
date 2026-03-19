@@ -110,20 +110,22 @@ function normalizeEmailSubject(subject: string): string {
     .toLowerCase()
 }
 
-function extractEngagementSummary(raw: any, bodyMaxChars: number) {
+function extractEngagementSummary(raw: any) {
   const eng = raw.engagement || {}
   const meta = raw.metadata || {}
   const assoc = raw.associations || {}
 
   let subject = ''
-  let bodyPreview = ''
+  let body = ''
   let direction: string | undefined = undefined
   let participants: string[] = []
 
   switch (eng.type) {
     case 'EMAIL':
+    case 'INCOMING_EMAIL':
+    case 'FORWARDED_EMAIL':
       subject = meta.subject || ''
-      bodyPreview = stripQuotedContent(stripHtml(meta.text || meta.html || ''))
+      body = stripQuotedContent(stripHtml(meta.text || meta.html || ''))
       if (meta.from?.email) {
         direction = `from: ${meta.from.email}`
         participants.push(meta.from.email)
@@ -136,25 +138,21 @@ function extractEngagementSummary(raw: any, bodyMaxChars: number) {
       break
     case 'CALL':
       subject = meta.title || ''
-      bodyPreview = stripHtml(meta.body || '')
+      body = stripHtml(meta.body || '')
       direction = meta.callDirection || undefined
       break
     case 'MEETING':
       subject = meta.title || ''
-      bodyPreview = stripHtml(meta.body || '')
+      body = stripHtml(meta.body || '')
       break
     case 'TASK':
       subject = meta.subject || ''
-      bodyPreview = stripHtml(meta.body || '')
+      body = stripHtml(meta.body || '')
       break
     case 'NOTE':
-      subject = (stripHtml(meta.body || '')).split('\n')[0]?.substring(0, 80) || ''
-      bodyPreview = stripHtml(meta.body || '')
+      subject = (stripHtml(meta.body || '')).split('\n')[0]?.substring(0, 120) || ''
+      body = stripHtml(meta.body || '')
       break
-  }
-
-  if (bodyPreview.length > bodyMaxChars) {
-    bodyPreview = bodyPreview.substring(0, bodyMaxChars) + '…'
   }
 
   return {
@@ -163,7 +161,7 @@ function extractEngagementSummary(raw: any, bodyMaxChars: number) {
     timestamp: eng.timestamp ? new Date(eng.timestamp).toISOString() : null,
     ownerId: eng.ownerId,
     subject,
-    bodyPreview,
+    body,
     direction,
     participants: participants.length > 0 ? participants : undefined,
     associationCounts: {
@@ -174,9 +172,58 @@ function extractEngagementSummary(raw: any, bodyMaxChars: number) {
   }
 }
 
+function normalizeParagraph(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+function deduplicateEngagements(summaries: any[]): any[] {
+  const sorted = [...summaries].sort((a, b) =>
+    new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime()
+  )
+
+  const seenParagraphs = new Set<string>()
+  let totalRemoved = 0
+
+  for (const entry of sorted) {
+    if (!entry.body) continue
+
+    const paragraphs = entry.body.split(/\n\s*\n/)
+    const unique: string[] = []
+    let removedFromThis = 0
+
+    for (const para of paragraphs) {
+      const trimmed = para.trim()
+      if (!trimmed) continue
+
+      const normalized = normalizeParagraph(trimmed)
+      if (normalized.length < 50) {
+        unique.push(trimmed)
+        continue
+      }
+
+      if (seenParagraphs.has(normalized)) {
+        removedFromThis++
+        continue
+      }
+
+      seenParagraphs.add(normalized)
+      unique.push(trimmed)
+    }
+
+    entry.body = unique.join('\n\n')
+    if (removedFromThis > 0) {
+      entry.duplicateParagraphsRemoved = removedFromThis
+      totalRemoved += removedFromThis
+    }
+  }
+
+  return sorted
+}
+
 function groupEmailThreads(summaries: any[]): any[] {
-  const emails = summaries.filter((s: any) => s.type === 'EMAIL')
-  const nonEmails = summaries.filter((s: any) => s.type !== 'EMAIL')
+  const emailTypes = ['EMAIL', 'INCOMING_EMAIL', 'FORWARDED_EMAIL']
+  const emails = summaries.filter((s: any) => emailTypes.includes(s.type))
+  const nonEmails = summaries.filter((s: any) => !emailTypes.includes(s.type))
 
   const threadMap = new Map<string, any[]>()
   for (const email of emails) {
@@ -186,7 +233,7 @@ function groupEmailThreads(summaries: any[]): any[] {
   }
 
   const grouped: any[] = []
-  for (const [subject, thread] of threadMap) {
+  for (const [_subject, thread] of threadMap) {
     if (thread.length === 1) {
       grouped.push(thread[0])
       continue
@@ -206,13 +253,18 @@ function groupEmailThreads(summaries: any[]): any[] {
     const latest = thread[thread.length - 1]
     grouped.push({
       type: 'EMAIL_THREAD',
-      subject: latest.subject || subject,
+      subject: latest.subject || _subject,
       messageCount: thread.length,
       firstMessage: thread[0].timestamp,
       lastMessage: latest.timestamp,
       participants: [...allParticipants],
-      latestBodyPreview: latest.bodyPreview,
-      engagementIds: thread.map((t: any) => t.id),
+      messages: thread.map((t: any) => ({
+        id: t.id,
+        timestamp: t.timestamp,
+        direction: t.direction,
+        body: t.body,
+        ...(t.duplicateParagraphsRemoved && { duplicateParagraphsRemoved: t.duplicateParagraphsRemoved }),
+      })),
     })
   }
 
@@ -247,6 +299,15 @@ function createServer({ config }: { config?: any } = {}) {
       exporterEndpoint: "https://api.otel.shinzo.tech/v1"
     })
   }
+
+  server.tool("get_current_time",
+    "Returns the current UTC date and time as an ISO 8601 string. " +
+    "Call this first whenever a user refers to a relative time period such as " +
+    "'this year', 'last month', 'this week', or 'today', so you can compute " +
+    "the correct startTime/endTime values for other tools.",
+    {},
+    async () => handleEndpoint(async () => formatResponse({ currentTime: new Date().toISOString() }))
+  )
 
   // Companies: https://developers.hubspot.com/docs/reference/api/crm/objects/companies
 
@@ -1954,11 +2015,12 @@ function createServer({ config }: { config?: any } = {}) {
   )
 
   server.tool("engagement_summary_associated",
-    "Get a compact summary of all engagements associated with an object. " +
-    "Returns a digest with type, date, subject/title, body preview, owner, " +
-    "and association counts. Email threads are grouped and quoted reply content " +
-    "is stripped. Use this instead of engagement_details_get_associated when " +
-    "summarizing communication history to avoid context overflow.",
+    "Get a deduplicated summary of all engagements associated with an object. " +
+    "Returns full message bodies with duplicate paragraphs removed across messages. " +
+    "Email threads are grouped, quoted reply content is stripped, and repeated " +
+    "content is eliminated using paragraph-level deduplication. " +
+    "Use this instead of engagement_details_get_associated when summarizing " +
+    "communication history to avoid context overflow.",
     {
       objectType: z.enum(['CONTACT', 'COMPANY', 'DEAL', 'TICKET']),
       objectId: z.string(),
@@ -1968,12 +2030,10 @@ function createServer({ config }: { config?: any } = {}) {
       startTime: z.string().optional(),
       endTime: z.string().optional(),
       maxResults: z.number().min(1).max(500).optional(),
-      bodyMaxChars: z.number().min(0).max(1000).optional(),
     },
     async (params) => {
       return handleEndpoint(async () => {
         const maxResults = params.maxResults ?? 250
-        const bodyMaxChars = params.bodyMaxChars ?? 200
         const summaries: any[] = []
         let offset = 0
         let hasMore = true
@@ -1992,17 +2052,19 @@ function createServer({ config }: { config?: any } = {}) {
           if (typeof data === 'string') return formatResponse(data)
 
           for (const result of (data.results || [])) {
-            summaries.push(extractEngagementSummary(result, bodyMaxChars))
+            summaries.push(extractEngagementSummary(result))
           }
 
           hasMore = data.hasMore === true
           offset = data.offset ?? offset + pageLimit
         }
 
-        const grouped = groupEmailThreads(summaries)
+        const deduped = deduplicateEngagements(summaries)
+        const grouped = groupEmailThreads(deduped)
 
+        const totalBodyChars = deduped.reduce((sum: number, e: any) => sum + (e.body?.length || 0), 0)
         const header = `Found ${summaries.length} engagements for ${params.objectType} ${params.objectId}` +
-          ` (${grouped.length} entries after email thread grouping, body previews truncated to ${bodyMaxChars} chars)`
+          ` (${grouped.length} entries after thread grouping, ${totalBodyChars} chars of unique body content)`
 
         return formatResponse({ summary: header, engagements: grouped })
       })

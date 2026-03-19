@@ -57,7 +57,6 @@ server.tool("engagement_summary_associated",
     startTime: z.string().optional(),  // ISO 8601 or epoch ms
     endTime: z.string().optional(),
     maxResults: z.number().min(1).max(500).optional(),     // default 250
-    bodyMaxChars: z.number().min(0).max(1000).optional(),  // default 200
   },
   async (params) => { ... }
 )
@@ -87,15 +86,48 @@ server.tool("engagement_summary_associated",
    Additionally prepends a one-line header:
    `"Found 142 engagements for COMPANY 12345 (showing 142, body previews truncated to 200 chars)"`
 
-### Output size estimation
+### Deduplication algorithm: paragraph-level content addressing
 
-Per engagement: ~300–500 chars of JSON (id, type, timestamp, subject, 200-char
-preview, direction, counts). For 250 engagements that's **~100KB** / roughly
-**25K tokens**. Well within any model's context, with room to spare for the
-system prompt, tool schemas, and the model's own reasoning.
+Instead of truncating bodies to a fixed char limit (which loses information),
+the tool preserves **full message bodies** and eliminates repeated content
+using paragraph-level deduplication — the same principle as git's content-
+addressable blob storage.
 
-Compare: the raw payload for 250 engagements with full email bodies can easily
-be 2–5MB / 500K–1.3M tokens.
+**How it works:**
+1. All engagements are sorted chronologically (earliest first)
+2. Each body is split into paragraphs (by blank lines / `\n\n`)
+3. Each paragraph is normalized (collapse whitespace, lowercase) for comparison
+4. A global `Set<string>` tracks every paragraph seen so far
+5. Paragraphs shorter than 50 chars are always kept (greetings, sign-offs —
+   cheap and useful for context)
+6. Substantial paragraphs are checked against the set:
+   - **First occurrence**: kept in full, added to set
+   - **Duplicate**: silently removed, counter incremented
+7. Each engagement's body is reassembled from only its unique paragraphs
+8. A `duplicateParagraphsRemoved` counter is attached when paragraphs were
+   dropped, so the LLM knows content was deduplicated
+
+**Why paragraph-level, not line-level or document-level:**
+- **Line-level** is too granular — would dedup common short phrases like
+  "Best regards," individually, adding noise to the counter
+- **Document-level** (MinHash/SimHash) would flag two emails as "similar"
+  but can't extract what's actually new in each
+- **Paragraph-level** matches the natural unit of email/note content and
+  catches exactly the duplication pattern in CRM data (quoted blocks,
+  signatures, boilerplate)
+
+### Output size estimation (real-world measurement)
+
+Tested against QwertyWorks (14 engagements, significant email thread history):
+
+| Version | Size | ~Tokens | Content preserved |
+|---------|------|---------|-------------------|
+| Raw (`engagement_details_get_associated`) | 5,691 KB | 1,457,008 | Full (unusable — exceeds context) |
+| Preview truncation (200 chars, v1) | 4.5 KB | 1,164 | ~2% of unique content |
+| **Paragraph dedup (v2, current)** | **132.6 KB** | **33,947** | **100% of unique content** |
+
+The deduped output is **43x smaller** than raw while preserving all unique
+message content — no information loss from truncation.
 
 ---
 
@@ -367,10 +399,11 @@ Also, truncation without structure loses context (cuts mid-JSON).
 | `src/index.ts` | Add `stripHtml` helper (~10 lines) | Before `createServer` |
 | `src/index.ts` | Add `stripQuotedContent` helper (~20 lines) | Before `createServer` |
 | `src/index.ts` | Add `normalizeEmailSubject` helper (~5 lines) | Before `createServer` |
-| `src/index.ts` | Add `extractEngagementSummary` helper (~45 lines) | Before `createServer` |
-| `src/index.ts` | Add `groupEmailThreads` helper (~40 lines) | Before `createServer` |
-| `src/index.ts` | Add `engagement_summary_associated` tool (~55 lines) | After line 1803 |
-| Total | ~175 lines of new code | No existing code modified |
+| `src/index.ts` | Add `extractEngagementSummary` helper (~55 lines) | Before `createServer` |
+| `src/index.ts` | Add `normalizeParagraph` + `deduplicateEngagements` (~35 lines) | Before `createServer` |
+| `src/index.ts` | Add `groupEmailThreads` helper (~45 lines) | Before `createServer` |
+| `src/index.ts` | Add `engagement_summary_associated` tool (~50 lines) | After engagement tools |
+| Total | ~220 lines of new code | No existing code modified |
 
 ---
 
