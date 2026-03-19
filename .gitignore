@@ -35,6 +35,7 @@ coverage/
 
 # Misc (project-specific)
 notes.txt
+*_output.txt
 
 # Cursor / local AI
 .cursor/
