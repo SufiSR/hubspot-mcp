@@ -4,18 +4,17 @@ WORKDIR /app
 
 ENV NODE_OPTIONS="--max-old-space-size=4096"
 
-RUN npm install -g pnpm
+EXPOSE 3000
 
-COPY --chown=node:node package.json pnpm-lock.yaml ./
+COPY --chown=node:node package.json package-lock.json .npmrc ./
 
-RUN pnpm fetch
-RUN pnpm install -r --offline
+RUN npm ci
 
 COPY --chown=node:node src/ ./src/
 COPY --chown=node:node tsconfig.json ./
 
-RUN pnpm build
+RUN npm run build
 
 USER node
 
-ENTRYPOINT ["pnpm", "run", "start"]
+ENTRYPOINT ["node", "dist/index.js"]

@@ -2,7 +2,8 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
-import { createStatefulServer } from "@smithery/sdk/server/stateful.js"
+import express from "express"
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
 import { instrumentServer } from "@shinzolabs/instrumentation-mcp"
 import { z } from "zod"
 
@@ -2526,6 +2527,18 @@ const transport = new StdioServerTransport()
 await stdioServer.connect(transport)
 
 // Streamable HTTP Server
-const { app } = createStatefulServer(createServer)
+const app = express()
+app.use(express.json())
+
+app.post('/mcp', async (req, res) => {
+  const token = (req.headers['x-auth-token'] as string)
+    || (req.headers['authorization'] as string)?.replace('Bearer ', '')
+
+  const server = createServer({ config: { HUBSPOT_ACCESS_TOKEN: token } })
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
+  await server.connect(transport)
+  await transport.handleRequest(req, res, req.body)
+})
+
 const PORT = process.env.PORT || 3000
-app.listen(PORT)
+app.listen(PORT, () => console.log(`MCP HTTP server listening on port ${PORT}`))

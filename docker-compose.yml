@@ -1,0 +1,9 @@
+services:
+  hubspot-mcp:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8003:3000"
+    environment:
+      PORT: 3000
+      TELEMETRY_ENABLED: "false"
