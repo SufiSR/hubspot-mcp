@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "node --max-old-space-size=4096 node_modules/typescript/bin/tsc -p tsconfig.json",
+    "llm-clean": "node scripts/run-llm-clean.mjs",
     "start": "node ./dist/index.js",
     "test": "jest"
   },

@@ -1,0 +1,32 @@
+{
+  "summary": "Example only — synthetic data showing the default engagement_summary_associated shape when llmOptimize is true (or omitted).",
+  "threads": [
+    {
+      "subject": "project kickoff",
+      "participants": ["alice@example.com", "bob@example.com"],
+      "messages": [
+        {
+          "timestamp": "2026-01-10T12:00:00.000Z",
+          "from": "alice@example.com",
+          "to": ["bob@example.com"],
+          "content": "Hi Bob, here is the timeline we agreed on: design by Friday, build next week."
+        },
+        {
+          "timestamp": "2026-01-11T09:00:00.000Z",
+          "from": "bob@example.com",
+          "to": ["alice@example.com"],
+          "content": "Thanks Alice — one question: can we slip design to Monday if legal is slow?"
+        }
+      ]
+    }
+  ],
+  "other_engagements": [
+    {
+      "type": "NOTE",
+      "timestamp": "2026-01-09T15:00:00.000Z",
+      "subject": "Call notes",
+      "content": "Discussed budget cap and Azure hosting preference."
+    }
+  ],
+  "llmOptimized": true
+}

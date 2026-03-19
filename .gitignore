@@ -36,6 +36,15 @@ coverage/
 # Misc (project-specific)
 notes.txt
 *_output.txt
+*.json.tmp
+deduped_clean.json
+cleaned_output.json
+examples/llm_optimized_comparison_output.json
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
 
 # Cursor / local AI
 .cursor/

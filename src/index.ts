@@ -6,6 +6,7 @@ import express from "express"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
 import { instrumentServer } from "@shinzolabs/instrumentation-mcp"
 import { z } from "zod"
+import { processLlmEngagementsFromGrouped } from "./llmEmailCleaner.js"
 
 function formatResponse(data: any) {
   let text = ''
@@ -2016,9 +2017,9 @@ function createServer({ config }: { config?: any } = {}) {
 
   server.tool("engagement_summary_associated",
     "Get a deduplicated summary of all engagements associated with an object. " +
-    "Returns full message bodies with duplicate paragraphs removed across messages. " +
-    "Email threads are grouped, quoted reply content is stripped, and repeated " +
-    "content is eliminated using paragraph-level deduplication. " +
+    "By default returns an LLM-optimized payload: threads[].messages[] with timestamp, from, to, content " +
+    "(aggressive reply/signature/disclaimer stripping, low-value message drops, global paragraph dedup). " +
+    "Set llmOptimize: false to get the intermediate grouped shape (EMAIL_THREAD with body/direction). " +
     "Use this instead of engagement_details_get_associated when summarizing " +
     "communication history to avoid context overflow.",
     {
@@ -2030,6 +2031,10 @@ function createServer({ config }: { config?: any } = {}) {
       startTime: z.string().optional(),
       endTime: z.string().optional(),
       maxResults: z.number().min(1).max(500).optional(),
+      llmOptimize: z.boolean().optional().describe(
+        "If true (default), return { threads, other_engagements } optimized for LLM tokens. " +
+        "If false, return { engagements } with EMAIL_THREAD grouping only."
+      ),
     },
     async (params) => {
       return handleEndpoint(async () => {
@@ -2063,10 +2068,34 @@ function createServer({ config }: { config?: any } = {}) {
         const grouped = groupEmailThreads(deduped)
 
         const totalBodyChars = deduped.reduce((sum: number, e: any) => sum + (e.body?.length || 0), 0)
-        const header = `Found ${summaries.length} engagements for ${params.objectType} ${params.objectId}` +
-          ` (${grouped.length} entries after thread grouping, ${totalBodyChars} chars of unique body content)`
+        const llmOptimize = params.llmOptimize !== false
 
-        return formatResponse({ summary: header, engagements: grouped })
+        if (!llmOptimize) {
+          const header = `Found ${summaries.length} engagements for ${params.objectType} ${params.objectId}` +
+            ` (${grouped.length} entries after thread grouping, ${totalBodyChars} chars of unique body content)`
+          return formatResponse({
+            summary: header,
+            engagements: grouped,
+            llmOptimized: false,
+          })
+        }
+
+        const { threads, other_engagements } = processLlmEngagementsFromGrouped(grouped)
+        const llmChars =
+          threads.reduce((sum, t: any) =>
+            sum + (t.messages || []).reduce((s: number, m: any) => s + (m.content?.length || 0), 0), 0) +
+          other_engagements.reduce((sum: number, e: any) => sum + (e.content?.length || 0), 0)
+
+        const header = `Found ${summaries.length} engagements for ${params.objectType} ${params.objectId}` +
+          ` → LLM view: ${threads.length} thread(s), ${other_engagements.length} other item(s), ` +
+          `${llmChars} chars in cleaned content (was ${totalBodyChars} chars unique body before LLM pass)`
+
+        return formatResponse({
+          summary: header,
+          threads,
+          other_engagements,
+          llmOptimized: true,
+        })
       })
     }
   )

@@ -19,8 +19,11 @@ This project is based on **[shinzo-labs/hubspot-mcp](https://github.com/shinzo-l
 | **npm** | pnpm lockfile in Docker | **`.npmrc`** (`legacy-peer-deps=true`) + **`package-lock.json`** for reproducible installs |
 | **Build** | `tsc` | **`node --max-old-space-size=4096`** wrapper in `npm run build` for large single-file compile |
 | **CI** | GitHub Actions workflows | **Workflows removed** (no `.github/workflows`) |
+| **`get_current_time` tool** | — | **Added** — returns the server's current UTC timestamp so the LLM can resolve relative date expressions ("this year", "last month", "today") into exact `startTime`/`endTime` values. LibreChat does not inject a current date into the system prompt, making this necessary for reliable date-filtered queries. |
 
-**Unchanged:** stdio transport, all **112** HubSpot tools, `HUBSPOT_ACCESS_TOKEN` from env for local/stdio, optional `TELEMETRY_ENABLED`, core MIT license and original tooling code paths.
+**Engagement summaries:** `engagement_summary_associated` returns a **default LLM-optimized** JSON shape (`threads` + `other_engagements` with `timestamp`, `from`, `to`, `content`). Use this for questions like *“summarize communication with company X”* — it avoids the huge raw payload from `engagement_details_get_associated`. Cleaning includes: **normalized lowercase subjects** and **merged threads** that only differed by `Re:/Fw:`/whitespace; **UTF-8 sanitization** (drops mojibake like `ÿè`); **hard-cut** at the first `From:` / `Sent:` / `On … wrote:` / `-----`; **disclaimer/signature/warning** stripping; **leading `Hi Name,` removal** when enough body remains; **drop messages** with fewer than **10** meaningful (non-stopword) words unless they contain a **URL** (then ≥5 such words). Set **`llmOptimize: false`** for the older grouped `engagements` array (`EMAIL_THREAD` + raw `body`). **Source of truth:** `src/llmEmailCleaner.ts`. Optional **Python mirror:** `preprocessing/email_cleaner.py` (offline CLI; kept in sync by hand).
+
+**Unchanged:** stdio transport, the original **112** HubSpot API tools, `HUBSPOT_ACCESS_TOKEN` from env for local/stdio, optional `TELEMETRY_ENABLED`, core MIT license and original tooling code paths.
 
 ## Prerequisites
 
@@ -92,7 +95,28 @@ For **HTTP**, the effective token is taken from **`X-Auth-Token`** or **`Authori
 
 ## Tools
 
-This fork exposes the **same 112 tools** as [shinzo-labs/hubspot-mcp](https://github.com/shinzo-labs/hubspot-mcp) (companies, contacts, leads, deals pipeline via generic objects, engagements, batch APIs, etc.). Use your client’s **`tools/list`** for the canonical names and schemas.
+This fork exposes **114 tools** (upstream **112** plus `get_current_time` and `engagement_summary_associated`) — see [shinzo-labs/hubspot-mcp](https://github.com/shinzo-labs/hubspot-mcp) (companies, contacts, leads, deals pipeline via generic objects, engagements, batch APIs, etc.). Use your client’s **`tools/list`** for the canonical names and schemas.
+
+### Offline LLM clean (optional)
+
+After `npm run build`, you can reproduce the same JSON as the default tool output from a saved **`{ "engagements": [...] }`** payload (e.g. exported with `llmOptimize: false`):
+
+```bash
+npm run llm-clean -- path/to/grouped.json path/to/output.json
+# equivalent: node scripts/run-llm-clean.mjs …
+```
+
+See **`examples/llm_optimized_format.example.json`** for the response shape. Do not commit real CRM data (see `.gitignore`, e.g. `examples/llm_optimized_comparison_output.json`, `deduped_clean.json`).
+
+## Development & testing
+
+```bash
+npm ci
+npm run build
+npm test          # Jest: e2e (MCP) + unit tests for llmEmailCleaner
+```
+
+LLM cleaning behavior is covered by **`test/llmEmailCleaner.test.ts`**. The **`preprocessing/`** folder is an optional Python port for scripts only (no pytest suite in this repo).
 
 ## Contributing
 
