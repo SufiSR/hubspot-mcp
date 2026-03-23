@@ -2918,6 +2918,9 @@ app.get("/mcp", (req, res) => {
   })
 })
 
+let lastOAuth401At = 0
+const OAUTH_COOLDOWN_MS = 120_000
+
 app.post('/mcp', async (req, res): Promise<void> => {
   const bearerToken = extractToken(req)
   const envToken = process.env.HUBSPOT_ACCESS_TOKEN?.trim() || null
@@ -2929,14 +2932,16 @@ app.post('/mcp', async (req, res): Promise<void> => {
     "env token:", envToken ? "present" : "missing"
   )
 
-  if (!effectiveToken && method === "tools/call") {
-    console.log("No token on tools/call — returning HTTP 401 to trigger OAuth")
-    res.status(401).end()
-    return
-  }
-
   if (!effectiveToken) {
-    console.log("No token on", method, "— allowing through with sentinel")
+    const now = Date.now()
+    const sinceLastOAuth = now - lastOAuth401At
+    if (sinceLastOAuth > OAUTH_COOLDOWN_MS) {
+      lastOAuth401At = now
+      console.log("No token — returning HTTP 401 to trigger OAuth (cooldown started)")
+      res.status(401).end()
+      return
+    }
+    console.log("No token on", method, "— OAuth cooldown active (" + Math.round(sinceLastOAuth / 1000) + "s), allowing through")
   }
 
   const server = createServer({ config: { HUBSPOT_ACCESS_TOKEN: effectiveToken || "__NO_TOKEN__" } })
