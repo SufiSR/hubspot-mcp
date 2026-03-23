@@ -2859,6 +2859,7 @@ await stdioServer.connect(transport)
 // Streamable HTTP Server
 const app = express()
 app.use(express.json())
+app.use(express.urlencoded({ extended: true }))
 
 function extractToken(req: express.Request): string | null {
   const header = req.headers.authorization
@@ -2868,6 +2869,39 @@ function extractToken(req: express.Request): string | null {
   }
   return null
 }
+
+app.post("/oauth/token", async (req, res): Promise<void> => {
+  console.log("Token proxy: incoming token exchange request")
+  const body = req.body as Record<string, string>
+
+  const forwardParams: Record<string, string> = {}
+  for (const [key, value] of Object.entries(body)) {
+    if (key === "code_verifier" || key === "code_challenge" || key === "code_challenge_method") {
+      console.log(`Token proxy: stripping PKCE param "${key}"`)
+      continue
+    }
+    forwardParams[key] = value
+  }
+
+  console.log("Token proxy: forwarding to HubSpot token endpoint, params:", Object.keys(forwardParams).join(", "))
+
+  try {
+    const hubspotRes = await fetch("https://api.hubapi.com/oauth/v1/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(forwardParams).toString(),
+    })
+
+    const responseText = await hubspotRes.text()
+    console.log("Token proxy: HubSpot responded", hubspotRes.status, responseText.slice(0, 200))
+
+    const contentType = hubspotRes.headers.get("content-type") || "application/json"
+    res.status(hubspotRes.status).set("Content-Type", contentType).send(responseText)
+  } catch (err) {
+    console.error("Token proxy: fetch error:", err)
+    res.status(502).json({ error: "token_proxy_error", message: String(err) })
+  }
+})
 
 app.get("/mcp", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream")
