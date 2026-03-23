@@ -2929,16 +2929,14 @@ app.post('/mcp', async (req, res): Promise<void> => {
     "env token:", envToken ? "present" : "missing"
   )
 
-  const isDiscovery = method === "initialize" || method === "notifications/initialized" || method === "tools/list"
-
-  if (!effectiveToken && !isDiscovery) {
-    console.log("No token on non-discovery request — returning HTTP 401 to trigger OAuth")
+  if (!effectiveToken && method === "tools/call") {
+    console.log("No token on tools/call — returning HTTP 401 to trigger OAuth")
     res.status(401).end()
     return
   }
 
-  if (!effectiveToken && isDiscovery) {
-    console.log("No token on discovery request — allowing through with sentinel")
+  if (!effectiveToken) {
+    console.log("No token on", method, "— allowing through with sentinel")
   }
 
   const server = createServer({ config: { HUBSPOT_ACCESS_TOKEN: effectiveToken || "__NO_TOKEN__" } })
