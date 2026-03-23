@@ -57,6 +57,12 @@ mcpServers:
 
 The MCP **`Accept`** header must allow both JSON and SSE, e.g. `application/json, text/event-stream` (LibreChat does this for streamable HTTP).
 
+### LibreChat + HubSpot OAuth (Bearer from LibreChat)
+
+LibreChat runs the OAuth flow and sends **`Authorization: Bearer <access_token>`** to this MCP. Configure the **`oauth:`** block for your server key in `librechat.yaml` (authorization URL, token URL, client id/secret, redirect URI, scopes) — see [LibreChat MCP servers → `oauth`](https://librechat.ai/docs/configuration/librechat_yaml/object_structure/mcp_servers).
+
+If a tool runs **before** a token is available, this server returns an MCP tool result with **`isError: true`** and JSON text: `{"code":401,"message":"Unauthorized","oauthRequired":true}` so the client can treat it as an auth signal (e.g. with **`MCP_OAUTH_ON_AUTH_ERROR=true`**).
+
 ## Local stdio (Cursor, Claude Desktop, etc.)
 
 Same as upstream: run the built server and set `HUBSPOT_ACCESS_TOKEN` in the client env.

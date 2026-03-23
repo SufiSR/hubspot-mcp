@@ -24,9 +24,30 @@ function formatResponse(data: any) {
   return { content: [{ type: "text", text }] }
 }
 
+/** LibreChat / clients: treat as tool failure + parse JSON for OAuth (401). */
+function formatUnauthorizedOAuthToolResponse() {
+  return {
+    isError: true,
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify({
+          code: 401,
+          message: "Unauthorized",
+          oauthRequired: true,
+        }),
+      },
+    ],
+  }
+}
+
+function isMissingHubSpotToken(apiKey: string) {
+  return !apiKey || apiKey === "__NO_TOKEN__"
+}
+
 async function makeApiRequest(apiKey: string, endpoint: string, params: Record<string, any> = {}, method = 'GET', body: Record<string, any> | null = null) {
-  if (!apiKey || apiKey === "__NO_TOKEN__") {
-    throw new Error("Authentication required")
+  if (isMissingHubSpotToken(apiKey)) {
+    throw new Error("Unauthorized")
   }
 
   const queryParams = new URLSearchParams()
@@ -61,8 +82,8 @@ async function makeApiRequestWithErrorHandling(apiKey: string, endpoint: string,
     const data = await makeApiRequest(apiKey, endpoint, params, method, body)
     return formatResponse(data)
   } catch (error: any) {
-    if (error?.message === "Authentication required") {
-      return formatResponse("Authentication required")
+    if (error?.message === "Unauthorized" || error?.message === "Authentication required") {
+      return formatUnauthorizedOAuthToolResponse()
     }
     return formatResponse(`Error performing request: ${error.message}`)
   }
@@ -72,6 +93,9 @@ async function handleEndpoint(apiCall: () => Promise<any>) {
   try {
     return await apiCall()
   } catch (error: any) {
+    if (error?.message === "Unauthorized" || error?.message === "Authentication required") {
+      return formatUnauthorizedOAuthToolResponse()
+    }
     return formatResponse(error.message)
   }
 }
