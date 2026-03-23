@@ -2844,28 +2844,32 @@ function extractToken(req: express.Request): string | null {
 
 app.post('/mcp', async (req, res) => {
   const token = extractToken(req)
-
-  if (!token) {
-    console.log("No token yet (OAuth phase)")
-    res.status(200).json({
-      status: "awaiting_oauth"
-    })
-    return
-  }
+  if (!token) console.log("No token yet (OAuth phase)")
 
   try {
-    console.log("Using token prefix:", token.slice(0, 10))
-    if (!token.startsWith("ey")) {
+    if (token) {
+      console.log("Using token prefix:", token.slice(0, 10))
+    }
+    if (token && !token.startsWith("ey")) {
       console.warn("Token looks suspicious")
     }
 
-    const server = createServer({ config: { HUBSPOT_ACCESS_TOKEN: token } })
+    const server = createServer({ config: { HUBSPOT_ACCESS_TOKEN: token || "" } })
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
     await server.connect(transport)
     await transport.handleRequest(req, res, req.body)
   } catch (err) {
     console.error("MCP error:", err)
-    res.status(500).json({ error: "MCP execution failed" })
+    if (!res.headersSent) {
+      res.status(200).json({
+        jsonrpc: "2.0",
+        id: req.body?.id ?? null,
+        error: {
+          code: -32000,
+          message: "MCP execution failed"
+        }
+      })
+    }
   }
 })
 
