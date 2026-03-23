@@ -653,7 +653,13 @@ describe('Hubspot MCP', () => {
     let crmBatchObjectIds: string[]
 
     beforeAll(async () => {
-      let transport = new StreamableHTTPClientTransport(streamableClientUrl)
+      const transport = new StreamableHTTPClientTransport(streamableClientUrl, {
+        requestInit: {
+          headers: {
+            'X-Auth-Token': process.env.HUBSPOT_ACCESS_TOKEN ?? ''
+          }
+        }
+      })
       await streamableClient.connect(transport)
     })
 

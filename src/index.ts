@@ -2832,6 +2832,12 @@ app.post('/mcp', async (req, res) => {
   const token = (req.headers['x-auth-token'] as string)
     || (req.headers['authorization'] as string)?.replace('Bearer ', '')
 
+  if (!token) {
+    return res.status(401).json({
+      error: "Unauthorized"
+    })
+  }
+
   const server = createServer({ config: { HUBSPOT_ACCESS_TOKEN: token } })
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
   await server.connect(transport)
