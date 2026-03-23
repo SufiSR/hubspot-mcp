@@ -2883,6 +2883,19 @@ app.post("/oauth/token", async (req, res): Promise<void> => {
     forwardParams[key] = value
   }
 
+  const authHeader = req.headers.authorization
+  if (typeof authHeader === "string" && authHeader.startsWith("Basic ")) {
+    const decoded = Buffer.from(authHeader.slice(6), "base64").toString("utf-8")
+    const colonIdx = decoded.indexOf(":")
+    if (colonIdx > 0) {
+      const clientId = decodeURIComponent(decoded.slice(0, colonIdx))
+      const clientSecret = decodeURIComponent(decoded.slice(colonIdx + 1))
+      if (!forwardParams.client_id) forwardParams.client_id = clientId
+      if (!forwardParams.client_secret) forwardParams.client_secret = clientSecret
+      console.log("Token proxy: extracted credentials from Basic auth header, client_id:", clientId.slice(0, 8) + "...")
+    }
+  }
+
   console.log("Token proxy: forwarding to HubSpot token endpoint, params:", Object.keys(forwardParams).join(", "))
 
   try {
