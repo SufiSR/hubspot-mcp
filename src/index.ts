@@ -2884,7 +2884,7 @@ app.get("/mcp", (req, res) => {
   })
 })
 
-app.post('/mcp', async (req, res) => {
+app.post('/mcp', async (req, res): Promise<void> => {
   const bearerToken = extractToken(req)
   const envToken = process.env.HUBSPOT_ACCESS_TOKEN?.trim() || null
   const effectiveToken = bearerToken || envToken
@@ -2894,7 +2894,13 @@ app.post('/mcp', async (req, res) => {
     "env token:", envToken ? "present" : "missing"
   )
 
-  const server = createServer({ config: { HUBSPOT_ACCESS_TOKEN: effectiveToken || "__NO_TOKEN__" } })
+  if (!effectiveToken) {
+    console.log("No token — returning HTTP 401 to trigger OAuth")
+    res.status(401).end()
+    return
+  }
+
+  const server = createServer({ config: { HUBSPOT_ACCESS_TOKEN: effectiveToken } })
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
   await server.connect(transport)
   try {
