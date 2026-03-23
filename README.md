@@ -63,7 +63,9 @@ The MCP **`Accept`** header must allow both JSON and SSE, e.g. `application/json
 
 LibreChat runs the OAuth flow and sends **`Authorization: Bearer <access_token>`** to this MCP. Configure the **`oauth:`** block for your server key in `librechat.yaml` (authorization URL, token URL, client id/secret, redirect URI, scopes) — see [LibreChat MCP servers → `oauth`](https://librechat.ai/docs/configuration/librechat_yaml/object_structure/mcp_servers).
 
-If a tool runs **before** a token is available, HubSpot API paths throw **`OAuth required`** so the MCP runtime can surface a tool error to the client (e.g. with **`MCP_OAUTH_ON_AUTH_ERROR=true`**).
+If a tool runs **before** a token is available, HubSpot API tools return an MCP result with **`isError: true`** and text **`Authentication required`** (LibreChat can use this with **`MCP_OAUTH_ON_AUTH_ERROR=true`**).
+
+HubSpot HTTP calls use a **10s** default timeout; override with **`HUBSPOT_API_TIMEOUT_MS`** (milliseconds).
 
 ## Local stdio (Cursor, Claude Desktop, etc.)
 

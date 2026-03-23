@@ -24,14 +24,28 @@ function formatResponse(data: any) {
   return { content: [{ type: "text", text }] }
 }
 
+/** LibreChat: stable tool-level auth signal (prefer over throwing through the SDK). */
+function authRequiredToolResult() {
+  return {
+    content: [{ type: "text" as const, text: "Authentication required" }],
+    isError: true,
+  }
+}
+
 function isMissingHubSpotToken(apiKey: string) {
   return !apiKey || apiKey === "__NO_TOKEN__"
 }
 
-async function makeApiRequest(apiKey: string, endpoint: string, params: Record<string, any> = {}, method = 'GET', body: Record<string, any> | null = null) {
+function assertAuth(apiKey: string) {
   if (isMissingHubSpotToken(apiKey)) {
     throw new Error("OAuth required")
   }
+}
+
+const HUBSPOT_API_TIMEOUT_MS = Number(process.env.HUBSPOT_API_TIMEOUT_MS) || 10_000
+
+async function makeApiRequest(apiKey: string, endpoint: string, params: Record<string, any> = {}, method = 'GET', body: Record<string, any> | null = null) {
+  assertAuth(apiKey)
 
   const queryParams = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => {
@@ -51,13 +65,22 @@ async function makeApiRequest(apiKey: string, endpoint: string, params: Record<s
 
   if (body) requestOptions.body = JSON.stringify(body)
 
-  const response = await fetch(url, requestOptions)
+  console.log("Calling HubSpot with token prefix:", apiKey.slice(0, 8))
 
-  if (!response.ok) return `Error fetching data from HubSpot: Status ${response.status}`
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), HUBSPOT_API_TIMEOUT_MS)
+  try {
+    requestOptions.signal = controller.signal
+    const response = await fetch(url, requestOptions)
 
-  if (response.status === 204) return `No data returned: Status ${response.status}`
+    if (!response.ok) return `Error fetching data from HubSpot: Status ${response.status}`
 
-  return await response.json()
+    if (response.status === 204) return `No data returned: Status ${response.status}`
+
+    return await response.json()
+  } finally {
+    clearTimeout(timeoutId)
+  }
 }
 
 async function makeApiRequestWithErrorHandling(apiKey: string, endpoint: string, params: Record<string, any> = {}, method = 'GET', body: Record<string, any> | null = null) {
@@ -65,7 +88,10 @@ async function makeApiRequestWithErrorHandling(apiKey: string, endpoint: string,
     const data = await makeApiRequest(apiKey, endpoint, params, method, body)
     return formatResponse(data)
   } catch (error: any) {
-    if (error?.message === "OAuth required") throw error
+    if (error?.message === "OAuth required") return authRequiredToolResult()
+    if (error?.name === "AbortError") {
+      return formatResponse(`Error performing request: HubSpot API timeout after ${HUBSPOT_API_TIMEOUT_MS}ms`)
+    }
     return formatResponse(`Error performing request: ${error.message}`)
   }
 }
@@ -74,7 +100,7 @@ async function handleEndpoint(apiCall: () => Promise<any>) {
   try {
     return await apiCall()
   } catch (error: any) {
-    if (error?.message === "OAuth required") throw error
+    if (error?.message === "OAuth required") return authRequiredToolResult()
     return formatResponse(error.message)
   }
 }
@@ -2838,7 +2864,7 @@ function extractToken(req: express.Request): string | null {
   const header = req.headers.authorization
   const h = typeof header === "string" ? header : header?.[0]
   if (h?.startsWith("Bearer ")) {
-    return h.replace("Bearer ", "").trim() || null
+    return h.slice(7).trim() || null
   }
   return null
 }
@@ -2860,6 +2886,7 @@ app.get("/mcp", (req, res) => {
 
 app.post('/mcp', async (req, res) => {
   const token = extractToken(req)
+  console.log("Incoming MCP request, token:", token ? "present" : "missing")
 
   const server = createServer({ config: { HUBSPOT_ACCESS_TOKEN: token || "__NO_TOKEN__" } })
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
