@@ -25,8 +25,8 @@ function formatResponse(data: any) {
 }
 
 async function makeApiRequest(apiKey: string, endpoint: string, params: Record<string, any> = {}, method = 'GET', body: Record<string, any> | null = null) {
-  if (!apiKey) {
-    throw new Error("HUBSPOT_ACCESS_TOKEN environment variable is not set")
+  if (!apiKey || apiKey === "__NO_TOKEN__") {
+    throw new Error("Authentication required")
   }
 
   const queryParams = new URLSearchParams()
@@ -61,6 +61,9 @@ async function makeApiRequestWithErrorHandling(apiKey: string, endpoint: string,
     const data = await makeApiRequest(apiKey, endpoint, params, method, body)
     return formatResponse(data)
   } catch (error: any) {
+    if (error?.message === "Authentication required") {
+      return formatResponse("Authentication required")
+    }
     return formatResponse(`Error performing request: ${error.message}`)
   }
 }
@@ -2854,7 +2857,7 @@ app.post('/mcp', async (req, res) => {
       console.warn("Token looks suspicious")
     }
 
-    const server = createServer({ config: { HUBSPOT_ACCESS_TOKEN: token || "" } })
+    const server = createServer({ config: { HUBSPOT_ACCESS_TOKEN: token || "__NO_TOKEN__" } })
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
     await server.connect(transport)
     await transport.handleRequest(req, res, req.body)
