@@ -2922,19 +2922,26 @@ app.post('/mcp', async (req, res): Promise<void> => {
   const bearerToken = extractToken(req)
   const envToken = process.env.HUBSPOT_ACCESS_TOKEN?.trim() || null
   const effectiveToken = bearerToken || envToken
+  const method = req.body?.method as string | undefined
   console.log(
-    "Incoming MCP request, method:", req.body?.method,
+    "Incoming MCP request, method:", method,
     "bearer:", bearerToken ? "present" : "missing",
     "env token:", envToken ? "present" : "missing"
   )
 
-  if (!effectiveToken) {
-    console.log("No token — returning HTTP 401 to trigger OAuth")
+  const isDiscovery = method === "initialize" || method === "notifications/initialized" || method === "tools/list"
+
+  if (!effectiveToken && !isDiscovery) {
+    console.log("No token on non-discovery request — returning HTTP 401 to trigger OAuth")
     res.status(401).end()
     return
   }
 
-  const server = createServer({ config: { HUBSPOT_ACCESS_TOKEN: effectiveToken } })
+  if (!effectiveToken && isDiscovery) {
+    console.log("No token on discovery request — allowing through with sentinel")
+  }
+
+  const server = createServer({ config: { HUBSPOT_ACCESS_TOKEN: effectiveToken || "__NO_TOKEN__" } })
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
   await server.connect(transport)
   try {
