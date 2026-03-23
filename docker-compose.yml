@@ -7,11 +7,6 @@ services:
     environment:
       PORT: 3000
       TELEMETRY_ENABLED: "false"
-      # OAuth challenge URL for LibreChat when no Bearer / no HUBSPOT_ACCESS_TOKEN:
-      # HUBSPOT_OAUTH_CLIENT_ID: "your-hubspot-app-client-id"
-      # HUBSPOT_OAUTH_REDIRECT_URI: "https://your-librechat-host/api/mcp/hubspot/oauth/callback"
-      # HUBSPOT_OAUTH_SCOPE: "crm.objects.contacts.read"
-      # HUBSPOT_OAUTH_AUTHORIZE_URL: "https://app-eu1.hubspot.com/oauth/authorize"
     networks:
       - mcp-shared
 

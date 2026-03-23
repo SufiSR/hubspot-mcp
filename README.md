@@ -63,26 +63,18 @@ The MCP **`Accept`** header must allow both JSON and SSE, e.g. `application/json
 
 LibreChat runs the OAuth flow and sends **`Authorization: Bearer <access_token>`** to this MCP. Configure the **`oauth:`** block for your server key in `librechat.yaml` (authorization URL, token URL, client id/secret, redirect URI, scopes) — see [LibreChat MCP servers → `oauth`](https://librechat.ai/docs/configuration/librechat_yaml/object_structure/mcp_servers).
 
-#### OAuth challenge from the MCP (no token yet)
+#### How OAuth works with this MCP
 
-If **neither** a Bearer token **nor** container env **`HUBSPOT_ACCESS_TOKEN`** is present, **`POST /mcp`** does **not** run the MCP transport. Instead it returns **JSON-RPC 2.0** with:
+The MCP **does not implement OAuth itself**. LibreChat handles the full OAuth flow (redirect, token exchange, storage). The MCP is a **passive token consumer**.
 
-- **`error.code`**: `401`
-- **`error.message`**: `OAuth required`
-- **`error.data`**: `{ "code": "OAUTH_REQUIRED", "authorization_url": "<built from env>" }`
+1. LibreChat connects to the MCP and completes the MCP handshake (`initialize`, `tools/list`) — **this works without a token**.
+2. LibreChat sees the `oauth` block in its config and starts the OAuth flow with HubSpot.
+3. After the user authorizes, LibreChat stores the token and re-connects with `Authorization: Bearer <token>`.
+4. Tool calls now reach HubSpot successfully.
 
-Set these on the **MCP server** (e.g. Docker `environment`) so the URL matches your HubSpot app and LibreChat callback:
+If a tool runs **before** a token is available, HubSpot API tools return **`isError: true`** and text **`Authentication required`**.
 
-| Variable | Required | Purpose |
-|----------|----------|---------|
-| **`HUBSPOT_OAUTH_CLIENT_ID`** | yes (for challenge URL) | HubSpot app client id |
-| **`HUBSPOT_OAUTH_REDIRECT_URI`** | yes | Same redirect as in LibreChat / HubSpot app (e.g. `https://your-librechat/api/mcp/hubspot/oauth/callback`) |
-| **`HUBSPOT_OAUTH_SCOPE`** | no | Space-separated scopes (must match app) |
-| **`HUBSPOT_OAUTH_AUTHORIZE_URL`** | no | Default `https://app.hubspot.com/oauth/authorize`; EU portals often need `https://app-eu1.hubspot.com/oauth/authorize` |
-
-Credentials used per request: **`Authorization: Bearer …` wins**; otherwise **`HUBSPOT_ACCESS_TOKEN`** from the environment (e.g. PAT in Docker).
-
-If a tool runs with placeholder token, HubSpot API tools return **`isError: true`** and text **`Authentication required`** (e.g. with **`MCP_OAUTH_ON_AUTH_ERROR=true`**).
+Credentials used per request: **`Authorization: Bearer …` wins**; otherwise **`HUBSPOT_ACCESS_TOKEN`** from the container environment (e.g. a PAT for non-OAuth setups).
 
 HubSpot HTTP calls use a **10s** default timeout; override with **`HUBSPOT_API_TIMEOUT_MS`** (milliseconds).
 
