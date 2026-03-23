@@ -2828,21 +2828,45 @@ await stdioServer.connect(transport)
 const app = express()
 app.use(express.json())
 
+function extractToken(req: express.Request): string | null {
+  const authorizationHeader = req.get("authorization")
+  if (authorizationHeader) {
+    const [scheme, ...valueParts] = authorizationHeader.trim().split(/\s+/)
+    if (scheme?.toLowerCase() === "bearer") {
+      const bearerToken = valueParts.join(" ").trim()
+      if (bearerToken) return bearerToken
+    }
+  }
+
+  const fallbackToken = req.get("x-auth-token")
+  return fallbackToken || null
+}
+
 app.post('/mcp', async (req, res) => {
-  const token = (req.headers['x-auth-token'] as string)
-    || (req.headers['authorization'] as string)?.replace('Bearer ', '')
+  const token = extractToken(req)
 
   if (!token) {
-    res.status(401).json({
-      error: "Unauthorized"
+    console.log("No token yet (OAuth phase)")
+    res.status(200).json({
+      status: "awaiting_oauth"
     })
     return
   }
 
-  const server = createServer({ config: { HUBSPOT_ACCESS_TOKEN: token } })
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
-  await server.connect(transport)
-  await transport.handleRequest(req, res, req.body)
+  try {
+    console.log("Using token prefix:", token.slice(0, 10))
+    if (!token.startsWith("ey")) {
+      console.warn("Token looks suspicious")
+    }
+
+    const server = createServer({ config: { HUBSPOT_ACCESS_TOKEN: token } })
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
+    await server.connect(transport)
+    await transport.handleRequest(req, res, req.body)
+  } catch (err) {
+    console.error("MCP error:", err)
+    res.status(500).json({ error: "MCP execution failed" })
+  }
 })
 
 const PORT = process.env.PORT || 3000
