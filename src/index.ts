@@ -2919,7 +2919,7 @@ app.get("/mcp", (req, res) => {
 })
 
 let lastOAuth401At = 0
-const OAUTH_COOLDOWN_MS = 120_000
+const OAUTH_COOLDOWN_MS = 10_000
 
 app.post('/mcp', async (req, res): Promise<void> => {
   const bearerToken = extractToken(req)
