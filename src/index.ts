@@ -2833,9 +2833,10 @@ app.post('/mcp', async (req, res) => {
     || (req.headers['authorization'] as string)?.replace('Bearer ', '')
 
   if (!token) {
-    return res.status(401).json({
+    res.status(401).json({
       error: "Unauthorized"
     })
+    return
   }
 
   const server = createServer({ config: { HUBSPOT_ACCESS_TOKEN: token } })
