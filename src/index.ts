@@ -24,30 +24,13 @@ function formatResponse(data: any) {
   return { content: [{ type: "text", text }] }
 }
 
-/** LibreChat / clients: treat as tool failure + parse JSON for OAuth (401). */
-function formatUnauthorizedOAuthToolResponse() {
-  return {
-    isError: true,
-    content: [
-      {
-        type: "text" as const,
-        text: JSON.stringify({
-          code: 401,
-          message: "Unauthorized",
-          oauthRequired: true,
-        }),
-      },
-    ],
-  }
-}
-
 function isMissingHubSpotToken(apiKey: string) {
   return !apiKey || apiKey === "__NO_TOKEN__"
 }
 
 async function makeApiRequest(apiKey: string, endpoint: string, params: Record<string, any> = {}, method = 'GET', body: Record<string, any> | null = null) {
   if (isMissingHubSpotToken(apiKey)) {
-    throw new Error("Unauthorized")
+    throw new Error("OAuth required")
   }
 
   const queryParams = new URLSearchParams()
@@ -82,9 +65,7 @@ async function makeApiRequestWithErrorHandling(apiKey: string, endpoint: string,
     const data = await makeApiRequest(apiKey, endpoint, params, method, body)
     return formatResponse(data)
   } catch (error: any) {
-    if (error?.message === "Unauthorized" || error?.message === "Authentication required") {
-      return formatUnauthorizedOAuthToolResponse()
-    }
+    if (error?.message === "OAuth required") throw error
     return formatResponse(`Error performing request: ${error.message}`)
   }
 }
@@ -93,9 +74,7 @@ async function handleEndpoint(apiCall: () => Promise<any>) {
   try {
     return await apiCall()
   } catch (error: any) {
-    if (error?.message === "Unauthorized" || error?.message === "Authentication required") {
-      return formatUnauthorizedOAuthToolResponse()
-    }
+    if (error?.message === "OAuth required") throw error
     return formatResponse(error.message)
   }
 }
@@ -2856,47 +2835,39 @@ const app = express()
 app.use(express.json())
 
 function extractToken(req: express.Request): string | null {
-  const authorizationHeader = req.get("authorization")
-  if (authorizationHeader) {
-    const [scheme, ...valueParts] = authorizationHeader.trim().split(/\s+/)
-    if (scheme?.toLowerCase() === "bearer") {
-      const bearerToken = valueParts.join(" ").trim()
-      if (bearerToken) return bearerToken
-    }
+  const header = req.headers.authorization
+  const h = typeof header === "string" ? header : header?.[0]
+  if (h?.startsWith("Bearer ")) {
+    return h.replace("Bearer ", "").trim() || null
   }
-
-  const fallbackToken = req.get("x-auth-token")
-  return fallbackToken || null
+  return null
 }
+
+app.get("/mcp", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream")
+  res.setHeader("Cache-Control", "no-cache")
+  res.setHeader("Connection", "keep-alive")
+  res.flushHeaders()
+
+  const interval = setInterval(() => {
+    res.write(": keepalive\n\n")
+  }, 15000)
+
+  req.on("close", () => {
+    clearInterval(interval)
+  })
+})
 
 app.post('/mcp', async (req, res) => {
   const token = extractToken(req)
-  if (!token) console.log("No token yet (OAuth phase)")
 
+  const server = createServer({ config: { HUBSPOT_ACCESS_TOKEN: token || "__NO_TOKEN__" } })
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
+  await server.connect(transport)
   try {
-    if (token) {
-      console.log("Using token prefix:", token.slice(0, 10))
-    }
-    if (token && !token.startsWith("ey")) {
-      console.warn("Token looks suspicious")
-    }
-
-    const server = createServer({ config: { HUBSPOT_ACCESS_TOKEN: token || "__NO_TOKEN__" } })
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
-    await server.connect(transport)
     await transport.handleRequest(req, res, req.body)
   } catch (err) {
     console.error("MCP error:", err)
-    if (!res.headersSent) {
-      res.status(200).json({
-        jsonrpc: "2.0",
-        id: req.body?.id ?? null,
-        error: {
-          code: -32000,
-          message: "MCP execution failed"
-        }
-      })
-    }
   }
 })
 

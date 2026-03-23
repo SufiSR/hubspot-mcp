@@ -12,7 +12,7 @@ This project is based on **[shinzo-labs/hubspot-mcp](https://github.com/shinzo-l
 | Area | Original | This fork |
 |------|----------|-----------|
 | **HTTP transport** | [`@smithery/sdk`](https://www.npmjs.com/package/@smithery/sdk) `createStatefulServer` (config via Smithery / init payload) | **Express** + official **`StreamableHTTPServerTransport`** from `@modelcontextprotocol/sdk` |
-| **Auth for HTTP** | Token in env or Smithery-supplied config | **`X-Auth-Token`** header (optional fallback: `Authorization: Bearer …`) so each user can send their own HubSpot PAT — e.g. **LibreChat** `customUserVars` |
+| **Auth for HTTP** | Token in env or Smithery-supplied config | **`Authorization: Bearer …`** per request (LibreChat OAuth injects this); optional **`HUBSPOT_ACCESS_TOKEN`** in env for the container only |
 | **Smithery** | `smithery.yaml`, Smithery-focused docs | **Removed** — self-hosted only |
 | **Docker** | pnpm-based image | **`npm ci`** + `package-lock.json`, **`EXPOSE 3000`**, entrypoint `node dist/index.js` |
 | **Compose** | — | **`docker-compose.yml`**: host port **8003** → container `3000` |
@@ -40,7 +40,7 @@ Inside Docker networks, use `http://<service>:3000/mcp` and set `PORT=3000` (def
 
 ## LibreChat (`streamable-http`)
 
-Point LibreChat at your deployed URL and pass the user’s token in a header:
+Point LibreChat at your deployed URL. For a **private app token** (no OAuth), pass it as Bearer:
 
 ```yaml
 mcpServers:
@@ -48,7 +48,7 @@ mcpServers:
     type: streamable-http
     url: "https://your-host:8003/mcp"
     headers:
-      X-Auth-Token: "{{HUBSPOT_ACCESS_TOKEN}}"
+      Authorization: "Bearer {{HUBSPOT_ACCESS_TOKEN}}"
     customUserVars:
       HUBSPOT_ACCESS_TOKEN:
         title: "HubSpot access token"
@@ -57,11 +57,13 @@ mcpServers:
 
 The MCP **`Accept`** header must allow both JSON and SSE, e.g. `application/json, text/event-stream` (LibreChat does this for streamable HTTP).
 
+**SSE:** `GET /mcp` returns a keep-alive event stream (used by some clients alongside `POST /mcp`).
+
 ### LibreChat + HubSpot OAuth (Bearer from LibreChat)
 
 LibreChat runs the OAuth flow and sends **`Authorization: Bearer <access_token>`** to this MCP. Configure the **`oauth:`** block for your server key in `librechat.yaml` (authorization URL, token URL, client id/secret, redirect URI, scopes) — see [LibreChat MCP servers → `oauth`](https://librechat.ai/docs/configuration/librechat_yaml/object_structure/mcp_servers).
 
-If a tool runs **before** a token is available, this server returns an MCP tool result with **`isError: true`** and JSON text: `{"code":401,"message":"Unauthorized","oauthRequired":true}` so the client can treat it as an auth signal (e.g. with **`MCP_OAUTH_ON_AUTH_ERROR=true`**).
+If a tool runs **before** a token is available, HubSpot API paths throw **`OAuth required`** so the MCP runtime can surface a tool error to the client (e.g. with **`MCP_OAUTH_ON_AUTH_ERROR=true`**).
 
 ## Local stdio (Cursor, Claude Desktop, etc.)
 
