@@ -63,7 +63,26 @@ The MCP **`Accept`** header must allow both JSON and SSE, e.g. `application/json
 
 LibreChat runs the OAuth flow and sends **`Authorization: Bearer <access_token>`** to this MCP. Configure the **`oauth:`** block for your server key in `librechat.yaml` (authorization URL, token URL, client id/secret, redirect URI, scopes) — see [LibreChat MCP servers → `oauth`](https://librechat.ai/docs/configuration/librechat_yaml/object_structure/mcp_servers).
 
-If a tool runs **before** a token is available, HubSpot API tools return an MCP result with **`isError: true`** and text **`Authentication required`** (LibreChat can use this with **`MCP_OAUTH_ON_AUTH_ERROR=true`**).
+#### OAuth challenge from the MCP (no token yet)
+
+If **neither** a Bearer token **nor** container env **`HUBSPOT_ACCESS_TOKEN`** is present, **`POST /mcp`** does **not** run the MCP transport. Instead it returns **JSON-RPC 2.0** with:
+
+- **`error.code`**: `401`
+- **`error.message`**: `OAuth required`
+- **`error.data`**: `{ "code": "OAUTH_REQUIRED", "authorization_url": "<built from env>" }`
+
+Set these on the **MCP server** (e.g. Docker `environment`) so the URL matches your HubSpot app and LibreChat callback:
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| **`HUBSPOT_OAUTH_CLIENT_ID`** | yes (for challenge URL) | HubSpot app client id |
+| **`HUBSPOT_OAUTH_REDIRECT_URI`** | yes | Same redirect as in LibreChat / HubSpot app (e.g. `https://your-librechat/api/mcp/hubspot/oauth/callback`) |
+| **`HUBSPOT_OAUTH_SCOPE`** | no | Space-separated scopes (must match app) |
+| **`HUBSPOT_OAUTH_AUTHORIZE_URL`** | no | Default `https://app.hubspot.com/oauth/authorize`; EU portals often need `https://app-eu1.hubspot.com/oauth/authorize` |
+
+Credentials used per request: **`Authorization: Bearer …` wins**; otherwise **`HUBSPOT_ACCESS_TOKEN`** from the environment (e.g. PAT in Docker).
+
+If a tool runs with placeholder token, HubSpot API tools return **`isError: true`** and text **`Authentication required`** (e.g. with **`MCP_OAUTH_ON_AUTH_ERROR=true`**).
 
 HubSpot HTTP calls use a **10s** default timeout; override with **`HUBSPOT_API_TIMEOUT_MS`** (milliseconds).
 

@@ -2869,6 +2869,29 @@ function extractToken(req: express.Request): string | null {
   return null
 }
 
+/** HubSpot authorize URL for LibreChat: MCP must return this at runtime when no token (see README env vars). */
+function buildHubSpotOAuthAuthorizationUrl(): string | null {
+  const clientId = process.env.HUBSPOT_OAUTH_CLIENT_ID?.trim()
+  const redirectUri = process.env.HUBSPOT_OAUTH_REDIRECT_URI?.trim()
+  if (!clientId || !redirectUri) return null
+
+  const base =
+    process.env.HUBSPOT_OAUTH_AUTHORIZE_URL?.trim() ||
+    "https://app.hubspot.com/oauth/authorize"
+  const scope = process.env.HUBSPOT_OAUTH_SCOPE?.trim() || ""
+
+  const u = new URL(base)
+  u.searchParams.set("client_id", clientId)
+  u.searchParams.set("redirect_uri", redirectUri)
+  if (scope) u.searchParams.set("scope", scope)
+  u.searchParams.set("response_type", "code")
+  return u.toString()
+}
+
+function isJsonRpcLikeBody(body: unknown): body is { jsonrpc?: string; id?: string | number | null } {
+  return body !== null && typeof body === "object" && "jsonrpc" in body
+}
+
 app.get("/mcp", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream")
   res.setHeader("Cache-Control", "no-cache")
@@ -2884,11 +2907,49 @@ app.get("/mcp", (req, res) => {
   })
 })
 
-app.post('/mcp', async (req, res) => {
-  const token = extractToken(req)
-  console.log("Incoming MCP request, token:", token ? "present" : "missing")
+app.post('/mcp', async (req, res): Promise<void> => {
+  const bearerToken = extractToken(req)
+  const envToken = process.env.HUBSPOT_ACCESS_TOKEN?.trim() || null
+  const effectiveToken = bearerToken || envToken
+  console.log(
+    "Incoming MCP request, bearer:",
+    bearerToken ? "present" : "missing",
+    "env token:",
+    envToken ? "present" : "missing"
+  )
 
-  const server = createServer({ config: { HUBSPOT_ACCESS_TOKEN: token || "__NO_TOKEN__" } })
+  // LibreChat: signal OAuth before MCP handshake when no credentials (Bearer or container PAT).
+  if (!effectiveToken) {
+    const authorizationUrl = buildHubSpotOAuthAuthorizationUrl()
+    const rpcId = isJsonRpcLikeBody(req.body) ? (req.body as { id?: string | number | null }).id ?? null : null
+
+    if (!authorizationUrl) {
+      console.warn(
+        "OAuth required but HUBSPOT_OAUTH_CLIENT_ID / HUBSPOT_OAUTH_REDIRECT_URI not set — cannot build authorization_url"
+      )
+    }
+
+    res.status(200).json({
+      jsonrpc: "2.0",
+      id: rpcId,
+      error: {
+        code: 401,
+        message: "OAuth required",
+        data: {
+          code: "OAUTH_REQUIRED",
+          authorization_url: authorizationUrl,
+          ...(authorizationUrl
+            ? {}
+            : {
+                hint: "Set HUBSPOT_OAUTH_CLIENT_ID, HUBSPOT_OAUTH_REDIRECT_URI, and optional HUBSPOT_OAUTH_SCOPE / HUBSPOT_OAUTH_AUTHORIZE_URL on the MCP server.",
+              }),
+        },
+      },
+    })
+    return
+  }
+
+  const server = createServer({ config: { HUBSPOT_ACCESS_TOKEN: effectiveToken } })
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
   await server.connect(transport)
   try {
